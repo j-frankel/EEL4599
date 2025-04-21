@@ -2,6 +2,15 @@
 #define RXD1 16
 #define USE_API_MODE true  // change to change the mode sending in
 
+
+#define TRIG_PIN 18 // for ultra sonic sensor
+#define ECHO_PIN 5 // for ultra sonic sensor
+
+// using 3 sample test for more accurate sensor results
+const int NUM_SAMPLES = 3; 
+float distance_samples[NUM_SAMPLES] = {0};
+int sample_index = 0;
+
 uint8_t dest_addr[8] = { 0x00, 0x13, 0xA2, 0x00, 0x41, 0xD0, 0x0C, 0xF1 }; // MAC for sink node
 
 // function to configure and send the API mode, used packet from Zigbee
@@ -50,21 +59,65 @@ void send_transparent(const char* message) {
   Serial1.println(message); 
 }
 
+// get 3 readings and avg them
+float get_smoothed_distance() {
+  // trigger the ultrasonic pulse:
+  // set TRIG pin to low to start 
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+
+  // set the TRIG pin HIGH for 10µs to trigger the ultrasonic burst
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  // time it takes for ECHO pin to go high
+  // timeout of 30ms
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+
+  // convert to cm
+  float distance_cm = duration * 0.0343 / 2;
+
+  // store the current distance in the circular buffer
+  distance_samples[sample_index] = distance_cm;
+
+  // update the index to the next slot (wrap around with modulo)
+  sample_index = (sample_index + 1) % NUM_SAMPLES;
+
+  // compute the average of the last NUM_SAMPLES distance readings
+  float avg_distance = 0;
+  for (int i = 0; i < NUM_SAMPLES; i++) {
+    avg_distance += distance_samples[i];
+  }
+
+  // return the smoothed distance (average)
+  return avg_distance / NUM_SAMPLES;
+}
 
 void setup() {
-  // sets up baud rate and serial communication
-  Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1); // 1 stop and start bit, 8 data, no parity, set Rx and Tx pins
+  Serial1.begin(9600, SERIAL_8N1, RXD1, TXD1);
+
+  // set pin modes
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+}
+
+void loop() {
+  float distance = get_smoothed_distance();
+
+  // Format as string ("ESP,27.52")
+  char message[32];
+  snprintf(message, sizeof(message), "ESP,%.2f", distance);
+
+
+  Serial.print("Sending: ");
+  Serial.println(message);
+
+  if (USE_API_MODE) {
+    send_api_frame(message);
+  } else {
+    send_transparent(message);
+  }
+
   delay(1000);
 }
-
-// CHANGE MODE AT THE TOP
-void loop() {
-  if (USE_API_MODE) {
-    send_api_frame("2025"); // case for api frame
-  } else {
-    send_transparent("2025"); // case for transparent mode
-  }
-  delay(1000); // delay for visability
-}
-
-
